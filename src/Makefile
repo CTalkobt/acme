@@ -1,5 +1,5 @@
 #
-# makefile for MingW
+# makefile for Linux (verified on Ubuntu, others likely to work but untested). 
 #
 
 CFLAGS	= -O3 -Wall -Wstrict-prototypes
@@ -56,8 +56,6 @@ symbol.o: config.h acme.h alu.h cpu.h dynabuf.h global.h input.h section.h tree.
 tree.o: config.h dynabuf.h global.h symbol.h tree.h tree.c
 
 typesystem.o: config.h global.h typesystem.h typesystem.c
-
-# _dos.o: _dos.h
 
 clean:
 	-$(RM) -f *.o $(PROG) *~ core resource.res logo.ico 
