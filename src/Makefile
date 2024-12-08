@@ -1,21 +1,21 @@
-CFLAGS		= -O3 -Wall -Wstrict-prototypes
-LIBS		= -lm
+CFLAGS	= -O3 -Wall -Wstrict-prototypes
+LIBS	= -lm
 CC		= gcc
 RM		= rm
+STRIP   = strip
 
-#SRC		=
-
-PROGS		= acme
-BINDIR		= /usr/local/bin
+PROGS		= ../bin/acme
 USERBIN		= $(HOME)/bin
 OBJS		= acme.o alu.o cliargs.o cpu.o dynabuf.o encoding.o flow.o global.o input.o macro.o mnemo.o output.o platform.o pseudoopcodes.o section.o symbol.o tree.o typesystem.o
 
 all: $(PROGS)
 
-acme: $(OBJS)
-	$(CC) $(CFLAGS) -o acme $(OBJS) $(LIBS)
-	strip acme
+userinstall:
+	cp ${PROGS} ${USERBIN}
 
+${PROGS}: $(OBJS)
+	$(CC) $(CFLAGS) -o ${PROGS} $(OBJS) $(LIBS)
+	$(STRIP) ${PROGS} 
 
 acme.o: config.h platform.h acme.h alu.h cpu.h dynabuf.h encoding.h flow.h global.h input.h macro.h mnemo.h output.h pseudoopcodes.h section.h symbol.h version.h acme.h acme.c
 
@@ -54,15 +54,7 @@ tree.o: config.h dynabuf.h global.h symbol.h tree.h tree.c
 typesystem.o: config.h global.h typesystem.h typesystem.c
 
 clean:
-	-$(RM) -f *.o $(PROGS) *~ core
+	$(RM) -f *.o $(PROGS) core
 
-
-install: all
-	install -d $(BINDIR)
-	install $(PROGS) $(BINDIR)
-
-userinstall: all
-	install -d $(USERBIN)
-	install $(PROGS) $(USERBIN)
 
 # DO NOT DELETE
