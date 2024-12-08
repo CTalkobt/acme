@@ -2,7 +2,7 @@ ASSEMBLER6502	= acme
 AS_FLAGS	= -v9 -Wtype-mismatch
 RM		= rm
 
-PROGS		= ddrv128.prg ddrv64.prg macedit.o trigono.o
+PROGS		= ddrv128.prg ddrv64.prg macedit.o trigono.o petmappings.o
 
 all: $(PROGS)
 
@@ -17,6 +17,9 @@ macedit.o: macedit.a
 
 trigono.o: trigono.a
 	$(ASSEMBLER6502) $(AS_FLAGS) --outfile trigono.o --format plain trigono.a
+
+petmappings.o: petmappings.a
+	$(ASSEMBLER6502) $(AS_FLAGS) --outfile petmappings.o --format plain petmappings.a
 
 clean:
 	-$(RM) -f *.o *.tmp $(PROGS) *~ core

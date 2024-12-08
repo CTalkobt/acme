@@ -1,0 +1,10 @@
+; @@TODO: Example of pet mapping conversion. 
+; Should output a CBM pi symbol using utf-8 conversion. 
+;
+!to "petmappings.o", plain
+* = $1300
+
+start:
+  lda #'π'
+  jsr $ffd2
+  rts

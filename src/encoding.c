@@ -39,6 +39,11 @@ static char encoderfn_raw(char byte)
 // convert raw to petscii
 static char encoderfn_pet(char byte)
 {
+    /** @@TODO: Example conversion of UTF-8 characters */
+	if (byte == 'π') { return (char) 0xff; }
+    if (byte == '↑') { return (char) 0x5f; }
+    if (byte == '│') { return (char) 0xdd; }
+
 	if ((byte >= 'A') && (byte <= 'Z'))
 		return (char) (byte | 0x80);	// FIXME - check why SAS-C
 	if ((byte >= 'a') && (byte <= 'z'))	//	wants these casts.
