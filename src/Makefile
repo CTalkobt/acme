@@ -1,27 +1,23 @@
-#
-# makefile for Linux (verified on Ubuntu, others likely to work but untested). 
-#
-
 CFLAGS	= -O3 -Wall -Wstrict-prototypes
 LIBS	= -lm
 CC		= gcc
 RM		= rm
+STRIP   = strip
 
-#SRC		=
-
-PROG		= ../bin/acme
-BINDIR		= /usr/local/bin
+PROGS		= ../bin/acme
 USERBIN		= $(HOME)/bin
+OBJS		= acme.o alu.o cliargs.o cpu.o dynabuf.o encoding.o flow.o global.o input.o macro.o mnemo.o output.o platform.o pseudoopcodes.o section.o symbol.o tree.o typesystem.o
 
-all: $(PROG)
+all: $(PROGS)
 
-${PROG}: acme.o alu.o cliargs.o cpu.o dynabuf.o encoding.o flow.o global.o input.o macro.o mnemo.o output.o platform.o pseudoopcodes.o section.o symbol.o tree.o typesystem.o _dos.o 
-	$(CC)  $(CFLAGS) -o ${PROG} acme.o alu.o cliargs.o cpu.o dynabuf.o encoding.o flow.o global.o input.o macro.o mnemo.o output.o platform.o pseudoopcodes.o section.o symbol.o tree.o typesystem.o ${LIBS}
-	strip ${PROG}
+userinstall:
+	cp ${PROGS} ${USERBIN}
 
+${PROGS}: $(OBJS)
+	$(CC) $(CFLAGS) -o ${PROGS} $(OBJS) $(LIBS)
+	$(STRIP) ${PROGS} 
 
-
-acme.o: config.h platform.h acme.h alu.h cpu.h dynabuf.h encoding.h flow.h global.h input.h macro.h mnemo.h output.h pseudoopcodes.h section.h symbol.h version.h acme.h _dos.h acme.c
+acme.o: config.h platform.h acme.h alu.h cpu.h dynabuf.h encoding.h flow.h global.h input.h macro.h mnemo.h output.h pseudoopcodes.h section.h symbol.h version.h acme.h acme.c
 
 alu.o: config.h platform.h cpu.h dynabuf.h encoding.h global.h input.h section.h symbol.h tree.h alu.h alu.c
 
@@ -58,15 +54,7 @@ tree.o: config.h dynabuf.h global.h symbol.h tree.h tree.c
 typesystem.o: config.h global.h typesystem.h typesystem.c
 
 clean:
-	-$(RM) -f *.o $(PROG) *~ core resource.res logo.ico 
+	$(RM) -f *.o $(PROGS) core
 
-
-install: all
-	install -d $(BINDIR)
-	install $(PROG) $(BINDIR)
-
-userinstall: all
-	install -d $(USERBIN)
-	install $(PROG) $(USERBIN)
 
 # DO NOT DELETE
