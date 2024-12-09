@@ -1,5 +1,5 @@
 // ACME - a crossassembler for producing 6502/65c02/65816/65ce02 code.
-// Copyright (C) 1998-2017 Marco Baye
+// Copyright (C) 1998-2020 Marco Baye
 //
 // This program is free software; you can redistribute it and/or modify
 // it under the terms of the GNU General Public License as published by
@@ -63,9 +63,14 @@ static const char	arg_vicelabels[]	= "VICE labels filename";
 #define OPTION_MSVC		"msvc"
 #define OPTION_COLOR		"color"
 #define OPTION_FULLSTOP		"fullstop"
+#define OPTION_IGNORE_ZEROES	"ignore-zeroes"
+#define OPTION_STRICT_SEGMENTS	"strict-segments"
+#define OPTION_DIALECT		"dialect"
+#define OPTION_TEST		"test"
 // options for "-W"
 #define OPTIONWNO_LABEL_INDENT	"no-label-indent"
 #define OPTIONWNO_OLD_FOR	"no-old-for"
+#define OPTIONWNO_BIN_LEN	"no-bin-len"
 #define OPTIONWTYPE_MISMATCH	"type-mismatch"
 
 
@@ -129,20 +134,24 @@ static void show_help_and_exit(void)
 "      --" OPTION_INITMEM " NUMBER   define 'empty' memory\n"
 "      --" OPTION_MAXERRORS " NUMBER set number of errors before exiting\n"
 "      --" OPTION_MAXDEPTH " NUMBER  set recursion depth for macro calls and !src\n"
+"      --" OPTION_IGNORE_ZEROES "    do not determine number size by leading zeroes\n"
+"      --" OPTION_STRICT_SEGMENTS "  turn segment overlap warnings into errors\n"
 "  -vDIGIT                set verbosity level\n"
 "  -DSYMBOL=VALUE         define global symbol\n"
 "  -I PATH/TO/DIR         add search path for input files\n"
-// as long as there is only one -W option:
-#define OPTIONWNO_LABEL_INDENT	"no-label-indent"
+// TODO: replace these:
 "  -W" OPTIONWNO_LABEL_INDENT "      suppress warnings about indented labels\n"
-"  -W" OPTIONWNO_OLD_FOR "           suppress warnings about old \"!for\" syntax\n"
+"  -W" OPTIONWNO_OLD_FOR "           (old, use \"--dialect 0.94.8\" instead)\n"
+"  -W" OPTIONWNO_BIN_LEN "           suppress warnings about lengths of binary literals\n"
 "  -W" OPTIONWTYPE_MISMATCH "        enable type checking (warn about type mismatch)\n"
-// when there are more, use next line and add a separate function:
+// with this line and add a separate function:
 //"  -W                     show warning level options\n"
 "      --" OPTION_USE_STDOUT "       fix for 'Relaunch64' IDE (see docs)\n"
 "      --" OPTION_MSVC "             output errors in MS VS format\n"
 "      --" OPTION_COLOR "            uses ANSI color codes for error output\n"
 "      --" OPTION_FULLSTOP "         use '.' as pseudo opcode prefix\n"
+"      --" OPTION_DIALECT " VERSION  behave like different version\n"
+"      --" OPTION_TEST "             enable experimental features\n"
 PLATFORM_OPTION_HELP
 "  -V, --" OPTION_VERSION "          show version and exit\n");
 	exit(EXIT_SUCCESS);
@@ -232,12 +241,13 @@ static void save_output_file(void)
 }
 
 
-// perform a single pass. Returns number of "NeedValue" type errors.
-static int perform_pass(void)
+// increment pass number and perform a single pass
+static void perform_pass(void)
 {
 	FILE	*fd;
 	int	ii;
 
+	++pass.number;
 	// call modules' "pass init" functions
 	Output_passinit();	// disable output, PC undefined
 	cputype_passinit(default_cpu);	// set default cpu type
@@ -247,8 +257,9 @@ static int perform_pass(void)
 	encoding_passinit();	// set default encoding
 	section_passinit();	// set initial zone (untitled)
 	// init variables
-	pass_undefined_count = 0;	// no "NeedValue" errors yet
-	pass_real_errors = 0;	// no real errors yet
+	pass.undefined_count = 0;
+	//pass.needvalue_count = 0;	FIXME - use
+	pass.error_count = 0;
 	// Process toplevel files
 	for (ii = 0; ii < toplevel_src_count; ++ii) {
 		if ((fd = fopen(toplevel_sources[ii], FILE_READBINARY))) {
@@ -257,66 +268,63 @@ static int perform_pass(void)
 			fprintf(stderr, "Error: Cannot open toplevel file \"%s\".\n", toplevel_sources[ii]);
 			if (toplevel_sources[ii][0] == '-')
 				fprintf(stderr, "Options (starting with '-') must be given _before_ source files!\n");
- 			++pass_real_errors;
+ 			++pass.error_count;
 		}
 	}
-	if (pass_real_errors)
+	Output_end_segment();
+/*	TODO:
+	if --save-start is given, parse arg string
+	if --save-limit is given, parse arg string
+*/
+	if (pass.error_count)
 		exit(ACME_finalize(EXIT_FAILURE));
-	else
-		Output_end_segment();
-	return pass_undefined_count;
 }
 
 
 static struct report	global_report;
 // do passes until done (or errors occurred). Return whether output is ready.
-static int do_actual_work(void)
+static boolean do_actual_work(void)
 {
-	int		undefined_prev,	// "NeedValue" errors of previous pass
-			undefined_curr;	// "NeedValue" errors of current pass
+	int	undefs_before;	// number of undefined results in previous pass
 
 	report = &global_report;	// let global pointer point to something
 	report_init(report);	// we must init struct before doing passes
 	if (config.process_verbosity > 1)
 		puts("First pass.");
-	pass_count = 0;
-	undefined_curr = perform_pass();	// First pass
-	// now pretend there has been a pass before the first one
-	undefined_prev = undefined_curr + 1;
-	// As long as the number of "NeedValue" errors is decreasing but
-	// non-zero, keep doing passes.
-	while (undefined_curr && (undefined_curr < undefined_prev)) {
-		++pass_count;
-		undefined_prev = undefined_curr;
+	pass.complain_about_undefined = FALSE;	// disable until error pass needed
+	pass.number = -1;	// pre-init, will be incremented by perform_pass()
+	perform_pass();	// first pass
+	// pretend there has been a previous pass, with one more undefined result
+	undefs_before = pass.undefined_count + 1;
+	// keep doing passes as long as the number of undefined results keeps decreasing.
+	// stop on zero (FIXME - zero-check pass.needvalue_count instead!)
+	while (pass.undefined_count && (pass.undefined_count < undefs_before)) {
+		undefs_before = pass.undefined_count;
 		if (config.process_verbosity > 1)
 			puts("Further pass.");
-		undefined_curr = perform_pass();
+		perform_pass();
 	}
 	// any errors left?
-	if (undefined_curr == 0) {
+	if (pass.undefined_count == 0) {	// FIXME - use pass.needvalue_count instead!
 		// if listing report is wanted and there were no errors,
 		// do another pass to generate listing report
 		if (report_filename) {
 			if (config.process_verbosity > 1)
 				puts("Extra pass to generate listing report.");
 			if (report_open(report, report_filename) == 0) {
-				++pass_count;
 				perform_pass();
 				report_close(report);
 			}
 		}
-		return 1;
+		return TRUE;
 	}
 	// There are still errors (unsolvable by doing further passes),
 	// so perform additional pass to find and show them.
 	if (config.process_verbosity > 1)
 		puts("Extra pass needed to find error.");
-	// activate error output
-	ALU_optional_notdef_handler = Throw_error;
-
-	++pass_count;
+	pass.complain_about_undefined = TRUE;	// activate error output
 	perform_pass();	// perform pass, but now show "value undefined"
-	return 0;
+	return FALSE;
 }
 
 
@@ -330,30 +338,43 @@ static void keyword_to_dynabuf(const char keyword[])
 }
 
 
-// check output format (the output format tree must be set up at this point!)
-static void set_output_format(void)
+// set output format (the output format tree must be set up at this point!)
+static void set_output_format(const char format_name[])
 {
-	keyword_to_dynabuf(cliargs_safe_get_next("output format"));
-	if (outputfile_set_format()) {
-		fprintf(stderr, "%sUnknown output format (known formats are: %s).\n", cliargs_error, outputfile_formats);
-		exit(EXIT_FAILURE);
+	// caution, name may be NULL!
+	if (format_name) {
+		keyword_to_dynabuf(format_name);
+		if (!outputfile_set_format())
+			return;	// ok
+
+		fputs("Error: Unknown output format.\n", stderr);
+	} else {
+		fputs("Error: No output format specified.\n", stderr);
 	}
+	fprintf(stderr, "Supported formats are:\n\n\t%s\n\n", outputfile_formats);
+	exit(EXIT_FAILURE);
 }
 
 
-// check CPU type (the cpu type tree must be set up at this point!)
-static void set_starting_cpu(void)
+// set CPU type (the cpu type tree must be set up at this point!)
+static void set_starting_cpu(const char cpu_name[])
 {
 	const struct cpu_type	*new_cpu_type;
 
-	keyword_to_dynabuf(cliargs_safe_get_next("CPU type"));
-	new_cpu_type = cputype_find();
-	if (new_cpu_type) {
-		default_cpu = new_cpu_type;
+	// caution, name may be NULL!
+	if (cpu_name) {
+		keyword_to_dynabuf(cpu_name);
+		new_cpu_type = cputype_find();
+		if (new_cpu_type) {
+			default_cpu = new_cpu_type;
+			return;	// ok
+		}
+		fputs("Error: Unknown CPU type.\n", stderr);
 	} else {
-		fprintf(stderr, "%sUnknown CPU type (known types are: %s).\n", cliargs_error, cputype_names);
-		exit(EXIT_FAILURE);
+		fputs("Error: No CPU type specified.\n", stderr);
 	}
+	fprintf(stderr, "Supported types are:\n\n\t%s\n\n", cputype_names);
+	exit(EXIT_FAILURE);
 }
 
 
@@ -366,8 +387,8 @@ static void could_not_parse(const char strange[])
 
 // return signed long representation of string.
 // copes with hexadecimal if prefixed with "$", "0x" or "0X".
-// copes with octal if prefixed with "&".
-// copes with binary if prefixed with "%".
+// copes with octal if prefixed with "&".	FIXME - add "0o" prefix?
+// copes with binary if prefixed with "%".	FIXME - add "0b" prefix!
 // assumes decimal otherwise.
 static signed long string_to_number(const char *string)
 {
@@ -396,9 +417,9 @@ static signed long string_to_number(const char *string)
 
 
 // set program counter
-static void set_starting_pc(void)
+static void set_starting_pc(const char expression[])
 {
-	start_address = string_to_number(cliargs_safe_get_next("program counter"));
+	start_address = string_to_number(expression);
 	if ((start_address > -1) && (start_address < 65536))
 		return;
 	fprintf(stderr, "%sProgram counter out of range (0-0xffff).\n", cliargs_error);
@@ -407,9 +428,9 @@ static void set_starting_pc(void)
 
 
 // set initial memory contents
-static void set_mem_contents(void)
+static void set_mem_contents(const char expression[])
 {
-	fill_value = string_to_number(cliargs_safe_get_next("initmem value"));
+	fill_value = string_to_number(expression);
 	if ((fill_value >= -128) && (fill_value <= 255))
 		return;
 	fprintf(stderr, "%sInitmem value out of range (0-0xff).\n", cliargs_error);
@@ -435,13 +456,64 @@ static void define_symbol(const char definition[])
 }
 
 
+struct dialect {
+	enum version	dialect;
+	const char	*version;
+	const char	*description;
+};
+struct dialect	dialects[]	= {
+	{VER_OLDEST_SUPPORTED,		"0.85",		"(the oldest version supported)"},
+	{VER_DEPRECATE_REALPC,		"0.86",		"\"!realpc\" gives a warning, \"!to\" wants a file format"},
+//	{VER_SHORTER_SETPC_WARNING,	"0.93",		"\"*=\" in offset assembly gives shorter warning but still switches off"},
+	{VER_RIGHTASSOCIATIVEPOWEROF,	"0.94.6",	"\"power of\" is now right-associative"},
+//	{VER_,				"0.94.7",	"empty code segments are no longer included in output file"},
+	{VER_DISABLED_OBSOLETE_STUFF,	"0.94.8",	"\"*=\" works inside \"!pseudopc\", disabled \"!cbm/!realpc/!subzone\""},
+	{VER_NEWFORSYNTAX,		"0.94.12",	"new \"!for\" syntax"},
+//	{VER_,				"0.95.2",	"changed ANC#8 from 0x2b to 0x0b"},
+	{VER_BACKSLASHESCAPING,		"0.97",		"backslash escaping and strings"},
+//	{VER_CURRENT,			"default",	"default"},
+	{VER_FUTURE,			"future",	"enable all experimental features"},
+	{0,				NULL,		NULL}	// NULLs terminate
+};
+
+// choose dialect (mimic behaviour of different version)
+static void set_dialect(const char version[])
+{
+	struct dialect	*dia;
+
+	// caution, version may be NULL!
+	if (version) {
+		// scan array
+		for (dia = dialects; dia->version; ++dia) {
+			if (strcmp(version, dia->version) == 0) {
+				config.wanted_version = dia->dialect;
+				return;	// found
+			}
+		}
+		fputs("Error: Unknown dialect specifier.\n", stderr);
+	} else {
+		fputs("Error: No dialect specified.\n", stderr);
+	}
+	// output table of possible versions and die
+	fputs(
+"Supported dialects are:\n"
+"\n"
+"\tdialect\t\tdescription\n"
+"\t-------\t\t-----------\n", stderr);
+	for (dia = dialects; dia->version; ++dia)
+		fprintf(stderr, "\t%s\t\t%s\n", dia->version, dia->description);
+	fputc('\n', stderr);
+	exit(EXIT_FAILURE);
+}
+
+
 // handle long options (like "--example"). Return unknown string.
 static const char *long_option(const char *string)
 {
 	if (strcmp(string, OPTION_HELP) == 0)
 		show_help_and_exit();
 	else if (strcmp(string, OPTION_FORMAT) == 0)
-		set_output_format();
+		set_output_format(cliargs_get_next());	// NULL is ok (handled like unknown)
 	else if (strcmp(string, OPTION_OUTFILE) == 0)
 		output_filename = cliargs_safe_get_next(name_outfile);
 	else if (strcmp(string, OPTION_LABELDUMP) == 0)	// old
@@ -453,11 +525,11 @@ static const char *long_option(const char *string)
 	else if (strcmp(string, OPTION_REPORT) == 0)
 		report_filename = cliargs_safe_get_next(arg_reportfile);
 	else if (strcmp(string, OPTION_SETPC) == 0)
-		set_starting_pc();
+		set_starting_pc(cliargs_safe_get_next("program counter"));
 	else if (strcmp(string, OPTION_CPU) == 0)
-		set_starting_cpu();
+		set_starting_cpu(cliargs_get_next());	// NULL is ok (handled like unknown)
 	else if (strcmp(string, OPTION_INITMEM) == 0)
-		set_mem_contents();
+		set_mem_contents(cliargs_safe_get_next("initmem value"));
 	else if (strcmp(string, OPTION_MAXERRORS) == 0)
 		config.max_errors = string_to_number(cliargs_safe_get_next("maximum error count"));
 	else if (strcmp(string, OPTION_MAXDEPTH) == 0)
@@ -465,12 +537,21 @@ static const char *long_option(const char *string)
 //	else if (strcmp(string, "strictsyntax") == 0)
 //		strict_syntax = TRUE;
 	else if (strcmp(string, OPTION_USE_STDOUT) == 0)
-		msg_stream = stdout;
+		config.msg_stream = stdout;
 	else if (strcmp(string, OPTION_MSVC) == 0)
 		config.format_msvc = TRUE;
 	else if (strcmp(string, OPTION_FULLSTOP) == 0)
 		config.pseudoop_prefix = '.';
-	PLATFORM_LONGOPTION_CODE
+	else if (strcmp(string, OPTION_IGNORE_ZEROES) == 0)
+		config.honor_leading_zeroes = FALSE;
+	else if (strcmp(string, OPTION_STRICT_SEGMENTS) == 0)
+		config.segment_warning_is_error = TRUE;
+	else if (strcmp(string, OPTION_DIALECT) == 0)
+		set_dialect(cliargs_get_next());	// NULL is ok (handled like unknown)
+	else if (strcmp(string, OPTION_TEST) == 0) {
+		config.wanted_version = VER_FUTURE;
+		config.test_new_features = TRUE;
+	} PLATFORM_LONGOPTION_CODE
 	else if (strcmp(string, OPTION_COLOR) == 0)
 		config.format_color = TRUE;
 	else if (strcmp(string, OPTION_VERSION) == 0)
@@ -490,7 +571,7 @@ static char short_option(const char *argument)
 			define_symbol(argument + 1);
 			goto done;
 		case 'f':	// "-f" selects output format
-			set_output_format();
+			set_output_format(cliargs_get_next());	// NULL is ok (handled like unknown)
 			break;
 		case 'h':	// "-h" shows help
 			show_help_and_exit();
@@ -525,7 +606,10 @@ static char short_option(const char *argument)
 				config.warn_on_indented_labels = FALSE;
 				goto done;
 			} else if (strcmp(argument + 1, OPTIONWNO_OLD_FOR) == 0) {
-				config.warn_on_old_for = FALSE;
+				config.wanted_version = VER_NEWFORSYNTAX - 1;
+				goto done;
+			} else if (strcmp(argument + 1, OPTIONWNO_BIN_LEN) == 0) {
+				config.warn_bin_mask = 0;
 				goto done;
 			} else if (strcmp(argument + 1, OPTIONWTYPE_MISMATCH) == 0) {
 				config.warn_on_type_mismatch = TRUE;
@@ -552,7 +636,6 @@ int main(int argc, const char *argv[])
 	// if called without any arguments, show usage info (not full help)
 	if (argc == 1)
 		show_help_and_exit();
-	msg_stream = stderr;
 	cliargs_init(argc, argv);
 	DynaBuf_init();	// inits *global* dynamic buffer - important, so first
 	// Init platform-specific stuff.
